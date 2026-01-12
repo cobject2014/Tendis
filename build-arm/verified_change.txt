@@ -1,0 +1,42 @@
+# Verified Changes for Tendis ARM Build
+
+## 1. Patches Applied
+The following patches were retrieved and applied to the source code to resolve missing headers (`tendis_extension.h`) and compilation errors:
+- `0001-fix-compile-error.patch`
+- `0002-add-latency-statistic-log.patch` (Fixes missing `tendis_extension.h`)
+- `0003-fix-rocksdb-compaction-iterator-error.patch`
+- `0004-jemalloc-5.3.0.patch`
+
+## 2. ARM64/Aarch64 Compatibility
+- Removed x86-specific optimization flags (`-mno-avx`, `-mno-avx2`, `-march=nocona`) using `sed`.
+- Added `-march=armv8-a` target architecture.
+- Added `-Wno-error` to compiler flags to treat narrowing conversion warnings (common in ARM char vs unsigned char) as warnings instead of errors.
+
+## 3. Compiler & Build Configuration
+- Base Image: `ubuntu:22.04` (provides GCC 11).
+- Added `-include cstdint` to `CXXFLAGS` to fix missing `uint64_t` definitions in standard headers.
+- Added `-fpermissive` to allow legacy C++ syntax.
+- Disabled `ENABLE_ALL_WARNINGS`, `BUILD_TESTING`, and `TENDIS_BUILD_TEST` in CMake to focus on the release binary.
+- Removed system `libgflags-dev` before compilation and used `FORCE_BUILD_GFLAGS=ON` to ensure the bundled version is used, avoiding ABI compilation mismatches.
+
+## 4. Dockerfile Adjustments
+- Changed build directory to `build_arm`.
+- Verified binary location at `build_arm/bin/tendisplus`.
+- Updated `COPY` paths for final image construction.
+
+## 5. Verified References from GitHub Issues
+Verified information merged from linked discussions (`build_arm.md`):
+
+### Issue #75: Compilation Error on Kunpeng ARM
+- **Problem Confirmation**: Verified that `char` is unsigned on ARM vs signed on x86, leading to logic errors in `base64.cpp`.
+- **Applied Fix**: Explicitly changed `char DecodeTable[]` and `char ch` to `signed char` in `src/tendisplus/utils/base64.cpp` via `sed` in Dockerfile.
+- **Reference**: Comments by `jimking0301` and `cmwl` regarding "comparison is always false due to limited range of data type".
+
+### Issue #270: Plan for Linux ARM Support
+- **Compiler Version**: Verified requirement for GCC 11.3.0+ (Satisfied by `ubuntu:22.04` base image).
+- **Flag Updates**: Verified instructions to remove `-mno-avx` and `-mno-avx2`. The Dockerfile now replaces these with generic or ARM-specific flags (`-march=armv8-a`).
+- **Reference**: Collaborator `takenliu` provided the specific list of changes on Jun 12, 2024.
+
+### Issue #281: ARM Architecture Compilation Error
+- **LTO Mismatch**: Confirmed that mixing system libraries (older GCC) with newer compilers causes LTO errors.
+- **Applied Fix**: Removed system `libgflags-dev` and forced build of bundled `gflags` (`-DFORCE_BUILD_GFLAGS=ON`) to ensure ABI compatibility and avoid link-time errors.
