@@ -1,0 +1,94 @@
+# --- Phase 1: Build Environment ---
+FROM  ubuntu:22.04 AS builder
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV GOPROXY=https://proxy.golang.org,direct
+
+# Install dependencies including those for testing (tcl)
+# Remove system golang to avoid conflicts, we will install newer version manually
+RUN apt-get update && apt-get install -y \
+    git cmake build-essential python3 curl m4 autoconf automake libtool \
+    libssl-dev zlib1g-dev libbz2-dev libsnappy-dev liblz4-dev libzstd-dev \
+    libgflags-dev libgoogle-perftools-dev \
+    tcl tcl8.6 net-tools wget \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Go 1.21 manually
+RUN wget https://go.dev/dl/go1.21.5.linux-arm64.tar.gz && \
+    tar -C /usr/local -xzf go1.21.5.linux-arm64.tar.gz && \
+    rm go1.21.5.linux-arm64.tar.gz
+ENV PATH=$PATH:/usr/local/go/bin
+
+WORKDIR /src
+
+# Clone Tendis
+RUN git clone --recursive --branch 2.8.3-rocksdb-v8.5.3 https://github.com/Tencent/Tendis.git
+
+WORKDIR /src/Tendis
+
+# Configure git
+RUN git config --global user.email "builder@example.com" && \
+    git config --global user.name "Builder"
+
+# Patch RocksDB
+RUN cd src/thirdparty/rocksdb/rocksdb && \
+    git am --abort || true && \
+    git am -s ../../patch/0001-add-statistic-for-sst-file-info.patch && \
+    git am -s ../../patch/0002-add-latency-statistic-log.patch && \
+    git am -s ../../patch/0003-better-control-of-blobldb-space-amp.patch
+
+# Patch Jemalloc
+RUN cd src/thirdparty/jemalloc && \
+    git apply ../patch/jemalloc_patch.diff
+
+# ARM Fixes
+RUN sed -i 's/signed char DecodeTable/char DecodeTable/g' src/tendisplus/utils/base64.cpp && \
+    sed -i 's/char DecodeTable/signed char DecodeTable/g' src/tendisplus/utils/base64.cpp && \
+    sed -i 's/signed char ch = DecodeTable/char ch = DecodeTable/g' src/tendisplus/utils/base64.cpp && \
+    sed -i 's/char ch = DecodeTable/signed char ch = DecodeTable/g' src/tendisplus/utils/base64.cpp
+
+RUN find . -name "CMakeLists.txt" -exec sed -i 's/-mno-avx -mno-avx2//g' {} + && \
+    find . -name "CMakeLists.txt" -exec sed -i 's/-march=nocona/-march=armv8-a/g' {} +
+
+ENV CXXFLAGS="-O3 -Wno-error -Wno-deprecated-declarations -fpermissive -include cstdint"
+ENV CFLAGS="-O3 -Wno-error -Wno-deprecated-declarations"
+
+# Removing system gflags to force internal build if needed, 
+# BUT for tests we might need the system one OR the internal one. 
+# Original Dockerfile removed it. Let's keep that logic but verify if tests need it.
+RUN apt-get remove -y libgflags-dev && apt-get autoremove -y
+
+# Build with Tests ENABLED
+# We build everything needed for testing
+RUN mkdir build && cd build && \
+    cmake .. -DCMAKE_BUILD_TYPE=Release \
+             -DENABLE_ALL_WARNINGS=OFF \
+             -DUSE_JEMALLOC=ON \
+             -DFORCE_BUILD_GFLAGS=ON \
+             -DSNAPPY_WITH_GFLAGS=OFF \
+             -DSNAPPY_WITH_TESTS=OFF \
+             -DBUILD_TESTING=ON \
+             -DTENDIS_BUILD_TEST=ON && \
+    make -j$(nproc)
+
+# We stay in the builder image for testing because we need the full build tree
+# (some tests might rely on source files or build artifacts in place)
+
+# Copy modified test files to override the cloned ones
+COPY temp_tendis/src/tendisplus/utils/utils_common_test.cpp /src/Tendis/src/tendisplus/utils/utils_common_test.cpp
+COPY temp_tendis/src/tendisplus/integrate_test/clear.sh /src/Tendis/src/tendisplus/integrate_test/clear.sh
+COPY temp_tendis/src/tendisplus/integrate_test/gotest.sh /src/Tendis/src/tendisplus/integrate_test/gotest.sh
+
+# Recompile Unit Test (because we changed .cpp)
+# Force remove old binary to ensure rebuild
+RUN rm -f /src/Tendis/build/bin/utils_common_test || true
+RUN cd /src/Tendis/build && make -j$(nproc)
+
+
+# Copy the sequential test runner from local context
+COPY run_full_test.sh /src/Tendis/run_full_test.sh
+RUN chmod +x /src/Tendis/run_full_test.sh
+RUN chmod +x /src/Tendis/src/tendisplus/integrate_test/clear.sh
+RUN chmod +x /src/Tendis/src/tendisplus/integrate_test/gotest.sh
+
+CMD ["/src/Tendis/run_full_test.sh"]
