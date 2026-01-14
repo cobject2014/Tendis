@@ -35,7 +35,26 @@ export GO111MODULE=on
 export GOPATH=`pwd`/gopath
 
 go get integrate_test/util
+# Ensure dependencies are consistent
+go mod tidy
 go mod download 
+
+# Patch ngaut/log for ARM64 (syscall.Dup2 -> syscall.Dup3)
+# Ensure files are writable
+chmod -R u+w "$GOPATH/pkg/mod"
+echo "Patching ngaut/log for ARM64 compatibility..."
+TARGET_FILE=$(find "$GOPATH/pkg/mod/github.com/ngaut" -name "crash_unix.go" | head -n 1)
+if [ -f "$TARGET_FILE" ]; then
+    echo "Found file: $TARGET_FILE"
+    cat "$TARGET_FILE"
+    # Use robust regex for Dup2 replacement
+    # Pattern saw in file: syscall.Dup2(int(f.Fd()), 2)
+    sed -i 's/syscall\.Dup2(int(f\.Fd()), 2)/syscall.Dup3(int(f.Fd()), 2, 0)/g' "$TARGET_FILE"
+    echo "--- After Patch ---"
+    grep "Dup3" "$TARGET_FILE" || echo "Patch failed? grep Dup3 returned nothing."
+else
+    echo "Error: crash_unix.go not found!"
+fi
 
 echo $GOPATH
 

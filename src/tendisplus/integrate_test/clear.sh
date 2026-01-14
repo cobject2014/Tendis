@@ -1,3 +1,6 @@
+if [ -z "$USER" ]; then
+    USER=$(whoami)
+fi
 user=$USER
 baseCmd="ps aux | grep ${user} | grep -v grep | grep -v gotest.sh"
 if [[ "$1" == "versiontest" ]]; then
