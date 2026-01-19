@@ -87,7 +87,11 @@ RUN cd /src/Tendis/build && make -j$(nproc)
 
 # Copy the sequential test runner from local context
 COPY run_full_test.sh /src/Tendis/run_full_test.sh
+COPY run_redis_compat_test.sh /src/Tendis/run_redis_compat_test.sh
+COPY run_go_integration_test.sh /src/Tendis/run_go_integration_test.sh
 RUN chmod +x /src/Tendis/run_full_test.sh
+RUN chmod +x /src/Tendis/run_redis_compat_test.sh
+RUN chmod +x /src/Tendis/run_go_integration_test.sh
 RUN chmod +x /src/Tendis/src/tendisplus/integrate_test/clear.sh
 RUN chmod +x /src/Tendis/src/tendisplus/integrate_test/gotest.sh
 
