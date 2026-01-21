@@ -8,8 +8,6 @@ set -e
 TENDIS_HOME="/src/Tendis"
 if [ -d "/src/Tendis" ]; then
     cd "/src/Tendis"
-elif [ -d "$(pwd)/temp_tendis" ]; then
-    cd "$(pwd)/temp_tendis"
 elif [ -f "testall.sh" ]; then
     echo "Running in current directory"
 else
@@ -80,6 +78,12 @@ if [ -d "$GOPATH/pkg/mod/github.com/ngaut" ]; then
     fi
 fi
 
+# Build compare_instances tool if not exists
+if [ ! -f "../../../bin/compare_instances" ]; then
+    echo "Building compare_instances tool..."
+    go build -o ../../../bin/compare_instances ../misc/compare_instances.go || echo "Warning: compare_instances build failed"
+fi
+
 echo ""
 echo "=================================================="
 echo "Running Go Integration Tests..."
@@ -112,7 +116,8 @@ rm -f all.log all_tmp.log gotest_run.log normaltest.log
 rm -rf running
 
 # Test selection - allow override via environment variable
-TEST_TYPE="${GO_TEST_TYPE:-normaltest}"
+# NOTE: Changed default from 'normaltest' to 'all' to match run_full_test.sh step 6
+TEST_TYPE="${GO_TEST_TYPE:-all}"
 
 echo "Test type: $TEST_TYPE"
 echo "Options: all, normaltest, normaltest-part1, normaltest-part2, normaltest-part3, versiontest"

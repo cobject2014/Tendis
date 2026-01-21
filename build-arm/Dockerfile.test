@@ -5,18 +5,21 @@ ENV DEBIAN_FRONTEND=noninteractive
 ENV GOPROXY=https://proxy.golang.org,direct
 
 # Install dependencies including those for testing (tcl)
-# Remove system golang to avoid conflicts, we will install newer version manually
+# Install qemu-user-static for x86_64 binary emulation on ARM64
 RUN apt-get update && apt-get install -y \
     git cmake build-essential python3 curl m4 autoconf automake libtool \
     libssl-dev zlib1g-dev libbz2-dev libsnappy-dev liblz4-dev libzstd-dev \
     libgflags-dev libgoogle-perftools-dev \
-    tcl tcl8.6 net-tools wget \
+    tcl tcl8.6 net-tools wget lsof redis-tools \
+    qemu-user-static \
     && rm -rf /var/lib/apt/lists/*
 
-# Install Go 1.21 manually
-RUN wget https://go.dev/dl/go1.21.5.linux-arm64.tar.gz && \
-    tar -C /usr/local -xzf go1.21.5.linux-arm64.tar.gz && \
-    rm go1.21.5.linux-arm64.tar.gz
+# Install Go 1.21 manually - auto-detect architecture
+RUN ARCH=$(dpkg --print-architecture) && \
+    if [ "$ARCH" = "amd64" ]; then GO_ARCH="amd64"; else GO_ARCH="arm64"; fi && \
+    wget https://go.dev/dl/go1.21.5.linux-${GO_ARCH}.tar.gz && \
+    tar -C /usr/local -xzf go1.21.5.linux-${GO_ARCH}.tar.gz && \
+    rm go1.21.5.linux-${GO_ARCH}.tar.gz
 ENV PATH=$PATH:/usr/local/go/bin
 
 WORKDIR /src
@@ -29,6 +32,12 @@ WORKDIR /src/Tendis
 # Configure git
 RUN git config --global user.email "builder@example.com" && \
     git config --global user.name "Builder"
+
+# Keep x86_64 binaries - OrbStack/Docker can emulate them on ARM64
+# The redis-benchmark, redis-cli, etc. in bin/ are CUSTOM-PATCHED by Tendis with -i/-f flag support
+# We cannot use standard Redis builds - they lack the custom flags needed by tests
+# Remove other x86_64 binaries we don't need
+RUN rm -f bin/redis-check-* bin/checkdts bin/redis-sync bin/compare_instances bin/memtier_benchmark bin/tar
 
 # Patch RocksDB
 RUN cd src/thirdparty/rocksdb/rocksdb && \
@@ -63,6 +72,7 @@ RUN apt-get remove -y libgflags-dev && apt-get autoremove -y
 RUN mkdir build && cd build && \
     cmake .. -DCMAKE_BUILD_TYPE=Release \
              -DENABLE_ALL_WARNINGS=OFF \
+             -DTENDIS_DEBUG=ON \
              -DUSE_JEMALLOC=ON \
              -DFORCE_BUILD_GFLAGS=ON \
              -DSNAPPY_WITH_GFLAGS=OFF \
@@ -71,13 +81,33 @@ RUN mkdir build && cd build && \
              -DTENDIS_BUILD_TEST=ON && \
     make -j$(nproc)
 
+# Build helper tools for tests (predixy)
+WORKDIR /tmp
+RUN git clone https://github.com/joyieldInc/predixy.git && \
+    cd predixy && \
+    make -j$(nproc) && \
+    mkdir -p /src/Tendis/bin && \
+    cp src/predixy /src/Tendis/bin/
+
+# Note: We keep the x86_64 redis-benchmark from GitHub repo because it has
+# custom Tendis patches for -i and -f flags that standard Redis doesn't have.
+# Docker/OrbStack can emulate x86_64 binaries on ARM64.
+
+WORKDIR /src/Tendis
+
 # We stay in the builder image for testing because we need the full build tree
 # (some tests might rely on source files or build artifacts in place)
 
 # Copy modified test files to override the cloned ones
-COPY temp_tendis/src/tendisplus/utils/utils_common_test.cpp /src/Tendis/src/tendisplus/utils/utils_common_test.cpp
-COPY temp_tendis/src/tendisplus/integrate_test/clear.sh /src/Tendis/src/tendisplus/integrate_test/clear.sh
-COPY temp_tendis/src/tendisplus/integrate_test/gotest.sh /src/Tendis/src/tendisplus/integrate_test/gotest.sh
+COPY src/tendisplus/utils/utils_common_test.cpp /src/Tendis/src/tendisplus/utils/utils_common_test.cpp
+COPY src/tendisplus/integrate_test/clear.sh /src/Tendis/src/tendisplus/integrate_test/clear.sh
+COPY src/tendisplus/integrate_test/gotest.sh /src/Tendis/src/tendisplus/integrate_test/gotest.sh
+
+# Copy all Go test source files from local fork to ensure fixes are included
+COPY src/tendisplus/integrate_test/*.go /src/Tendis/src/tendisplus/integrate_test/
+COPY src/tendisplus/integrate_test/go.mod /src/Tendis/src/tendisplus/integrate_test/go.mod
+COPY src/tendisplus/integrate_test/dts/ /src/Tendis/src/tendisplus/integrate_test/dts/
+COPY src/tendisplus/integrate_test/util/ /src/Tendis/src/tendisplus/integrate_test/util/
 
 # Recompile Unit Test (because we changed .cpp)
 # Force remove old binary to ensure rebuild

@@ -115,13 +115,16 @@ function checkPassed(){
     return 0
 }
 
-testNum=0
+expected_total=0
+
 if [[ $testcontent == "all" || "${testcontent}" == "versiontest" ]]; then
-    testNum=1
+    batch_size=1
+    expected_total=$((expected_total + batch_size))
+    
     rm -rf versiontest
     go build versiontest.go common.go common_cluster.go
     runOne "./versiontest $@"
-    checkPassed $logfile $testNum
+    checkPassed $logfile $expected_total
 fi
 
 if [[ $testcontent == "all" || "${testcontent}" == "normaltest" || "${testcontent}" == "normaltest-part1" ]]; then
@@ -132,8 +135,10 @@ if [[ $testcontent == "all" || "${testcontent}" == "normaltest" || "${testconten
     go build restore.go common.go
     go build restoretest.go common.go
     go build clustertest.go common.go common_cluster.go
-    testNum=6
-
+    
+    batch_size=6
+    expected_total=$((expected_total + batch_size))
+    
     runOne ./adminHeartbeat
     runOne ./repl
     runOne ./repltest
@@ -144,24 +149,30 @@ if [[ $testcontent == "all" || "${testcontent}" == "normaltest" || "${testconten
     #runOne './clustertest -optype=hset -clusterNodeNum=5 -num1=10000'
     #runOne './clustertest -optype=lpush -clusterNodeNum=5 -num1=10000'
     #runOne './clustertest -optype=zadd -clusterNodeNum=5 -num1=10000'
-    checkPassed $logfile $testNum
+    checkPassed $logfile $expected_total
 fi
 
 if [[ $testcontent == "all" || "${testcontent}" == "normaltest" || "${testcontent}" == "normaltest-part2" ]]; then
     rm -rf clustertestRestore clustertestFailover dts/dts
-    testNum=3
+    
+    batch_size=3
+    expected_total=$((expected_total + batch_size))
+    
     go build clustertestRestore.go common.go common_cluster.go
     go build clustertestFailover.go common.go common_cluster.go
     go build -o dts/dts dts/dts.go dts/dts_common.go
     runOne './clustertestRestore'
     runOne './clustertestFailover'
     runOne './dts/dts'
-    checkPassed $logfile $testNum
+    checkPassed $logfile $expected_total
 fi
 
 if [[ $testcontent == "all" || "${testcontent}" == "normaltest" || "${testcontent}" == "normaltest-part3" ]]; then
     rm -rf dts/dts_sync deletefilesinrange memorylimit pubsubtest
-    testNum=4
+    
+    batch_size=4
+    expected_total=$((expected_total + batch_size))
+    
     go build -o dts/dts_sync dts/dts_sync.go dts/dts_common.go
     go build deletefilesinrange.go common.go common_cluster.go
     go build memorylimit.go common.go
@@ -170,6 +181,6 @@ if [[ $testcontent == "all" || "${testcontent}" == "normaltest" || "${testconten
     runOne './deletefilesinrange -optype=set'
     runOne ./memorylimit
     runOne './pubsubtest'
-    checkPassed $logfile $testNum
+    checkPassed $logfile $expected_total
 fi
 
