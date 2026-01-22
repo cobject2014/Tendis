@@ -6,7 +6,19 @@ ENV GOPROXY=https://proxy.golang.org,direct
 
 # Install dependencies including those for testing (tcl)
 # Install qemu-user-static for x86_64 binary emulation on ARM64
-RUN apt-get update && apt-get install -y \
+# Add amd64 architecture to support running x86_64 binaries (checkdts, redis-benchmark)
+# Configure separate sources for arm64 (ports) and amd64 (archive)
+RUN dpkg --add-architecture amd64 && \
+    cp /etc/apt/sources.list /etc/apt/sources.list.bak && \
+    echo "deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports jammy main restricted universe multiverse" > /etc/apt/sources.list && \
+    echo "deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports jammy-updates main restricted universe multiverse" >> /etc/apt/sources.list && \
+    echo "deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports jammy-security main restricted universe multiverse" >> /etc/apt/sources.list && \
+    echo "deb [arch=amd64] http://archive.ubuntu.com/ubuntu jammy main restricted universe multiverse" >> /etc/apt/sources.list && \
+    echo "deb [arch=amd64] http://archive.ubuntu.com/ubuntu jammy-updates main restricted universe multiverse" >> /etc/apt/sources.list && \
+    echo "deb [arch=amd64] http://security.ubuntu.com/ubuntu jammy-security main restricted universe multiverse" >> /etc/apt/sources.list && \
+    apt-get update && \
+    apt-get install -y \
+    libc6:amd64 libstdc++6:amd64 \
     git cmake build-essential python3 curl m4 autoconf automake libtool \
     libssl-dev zlib1g-dev libbz2-dev libsnappy-dev liblz4-dev libzstd-dev \
     libgflags-dev libgoogle-perftools-dev \
@@ -36,8 +48,8 @@ RUN git config --global user.email "builder@example.com" && \
 # Keep x86_64 binaries - OrbStack/Docker can emulate them on ARM64
 # The redis-benchmark, redis-cli, etc. in bin/ are CUSTOM-PATCHED by Tendis with -i/-f flag support
 # We cannot use standard Redis builds - they lack the custom flags needed by tests
-# Remove other x86_64 binaries we don't need
-RUN rm -f bin/redis-check-* bin/checkdts bin/redis-sync bin/compare_instances bin/memtier_benchmark bin/tar
+# We KEEP x86_64 binaries (checkdts, redis-sync, etc.) because we now have qemu+libc6:amd64 support
+RUN rm -f bin/memtier_benchmark bin/tar
 
 # Patch RocksDB
 RUN cd src/thirdparty/rocksdb/rocksdb && \

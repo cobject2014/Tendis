@@ -182,3 +182,85 @@ NOTES
 ================================================================================
 END OF VERIFIED CHANGES
 ================================================================================
+================================================================================
+5. FILE: src/tendisplus/integrate_test/util/addData.go
+================================================================================
+PURPOSE: Fix benchmark failures on ARM64 and handle connection drops during failover tests
+
+CHANGES:
+A. Implemented Go-based fallback for redis-benchmark:
+   - Added `AddDataWithBenchmarkFallback` function using `go-redis` client.
+   - Updated `AddDataWithBenchmark` to catch errors and invoke fallback.
+
+B. Handled connection errors gracefully:
+   - Changed error handling in `AddDataWithBenchmarkFallback` from `log.Fatal` to `log.Warn`.
+   - This prevents the test runner from crashing when connections are intentionally killed during `clustertestFailover.go`.
+
+RATIONALE:
+The bundled `redis-benchmark` is an x86_64 binary which may be unstable under emulation or incompatible with the specific test network conditions. The Go fallback ensures data generation succeeds. Warning-only logs allow tests involving chaos/failover to proceed without aborting on expected errors.
+
+================================================================================
+6. FILE: src/tendisplus/integrate_test/clustertestFailover.go
+================================================================================
+PURPOSE: Fix timing/race conditions in failover tests on slower/emulated environments
+
+CHANGES:
+- Replaced direct calls to `cluster_check_sync_full` with `wait_cluster_check_sync_full`.
+- Replaced direct calls to `cluster_check_sync_partial_ok` with `wait_cluster_check_sync_partial_ok`.
+- These new `wait_` functions include a 60-second retry loop (sleeping 1s between attempts).
+
+RATIONALE:
+Containerized environments (especially under emulation) are slower than native hardware. Immediate checks for synchronization status often failed before the cluster converged. Polling ensures robustness.
+
+================================================================================
+7. FILE: src/tendisplus/integrate_test/pubsubtest.go
+================================================================================
+PURPOSE: Fix flaky PubSub tests due to Proxy propagation delays
+
+CHANGES:
+A. Increased log wait time:
+   - In `getSubscribeResult`, increased sleep for file I/O from 20ms to 2000ms.
+   
+B. Added Retry Logic for Proxy (Predixy):
+   - In `migrateTest`, added a loop to retry `check_sub_and_pub` for up to 10 seconds if it initially fails when connecting via Proxy.
+
+RATIONALE:
+File system I/O latency in Docker required longer waits for log flushing. Predixy proxy takes time to update its slot mapping after migration; immediate checks resulted in MOVED errors. Retrying allows the topology to settle.
+
+================================================================================
+8. FILE: src/tendisplus/integrate_test/gotest.sh
+================================================================================
+PURPOSE: Fix incorrect cumulative test counting logic
+
+CHANGES:
+- Modified the pass counting logic to use a cumulative `expected_total` variable.
+- Previously, the script expected the `grep count` to equal only the *current batch* size, ignoring previous batches in the same log file, causing false failures.
+
+RATIONALE:
+Ensures that running `testcontent="all"` correctly validates the total number of passed tests across all executed suites.
+
+================================================================================
+9. FILE: Dockerfile.test
+================================================================================
+PURPOSE: Enable execution of x86_64 binaries on ARM64 (Multi-arch support)
+
+CHANGES:
+A. Added `dpkg --add-architecture amd64` and configured `sources.list` for multi-arch (ports for arm64, archive for amd64).
+B. Installed `libc6:amd64` and `libstdc++6:amd64` alongside `qemu-user-static`.
+C. Added `-DTENDIS_DEBUG=ON` to CMake build validation to enable `setinstore` command.
+D. Stopped removing binaries: `bin/checkdts`, `bin/redis-sync`, etc., are now preserved.
+
+RATIONALE:
+The test suite relies on specific pre-compiled x86_64 binaries (like `checkdts`, `predixy`) for which source was not easily compiled or available. Installing QEMU and compatible libraries allows these to run transparently on ARM64. `TENDIS_DEBUG` is required for the `setinstore` command used in `restore.go`.
+
+================================================================================
+10. FILE: run_go_integration_test.sh
+================================================================================
+PURPOSE: Improve error reporting and prevent premature exit
+
+CHANGES:
+- Wrapped `gotest.sh` execution with `set +e` / `set -e` blocks.
+- Capture exit code and allow the script to proceed to the summary section even if tests fail.
+
+RATIONALE:
+Previous `set -e` caused the script to exit silently on the first failure, hiding the summary and verify logs.

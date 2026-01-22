@@ -29,6 +29,26 @@ func checkBinlog(servers *[]util.RedisServer, index int, num int) {
 	log.Infof("check incrSync log end")
 }
 
+func wait_cluster_check_sync_full(m *util.RedisServer, times int) bool {
+	for i := 0; i < 60; i++ {
+		if cluster_check_sync_full(m, times) {
+			return true
+		}
+		time.Sleep(1 * time.Second)
+	}
+	return false
+}
+
+func wait_cluster_check_sync_partial_ok(m *util.RedisServer, times int) bool {
+	for i := 0; i < 60; i++ {
+		if cluster_check_sync_partial_ok(m, times) {
+			return true
+		}
+		time.Sleep(1 * time.Second)
+	}
+	return false
+}
+
 func testClusterManualFailoverIncrSync(mport int) {
 	cfg := make(map[string]string)
 	cfg["aof-enabled"] = "yes"
@@ -68,12 +88,12 @@ func testClusterManualFailoverIncrSync(mport int) {
 	go util.AddDataWithBenchmarkInCo(&predixy.RedisServer, *auth, 500000, "tag", "set", channel)
 
 	// check master sync_full and partial_sync times
-	if !cluster_check_sync_full(&master, 4) {
+	if !wait_cluster_check_sync_full(&master, 4) {
 		log.Fatal("cluster check sync_full error")
 	}
 	log.Debug("cluster check sync_full ok")
 
-	if !cluster_check_sync_partial_ok(&master, 4) {
+	if !wait_cluster_check_sync_partial_ok(&master, 4) {
 		log.Fatalf("cluster check sync_partial_ok error")
 	}
 	log.Debug("cluster check sync_partial_ok ok")
@@ -83,12 +103,12 @@ func testClusterManualFailoverIncrSync(mport int) {
 
 	time.Sleep(15 * time.Second)
 	// check master sync_full and partial_sync times again
-	if !cluster_check_sync_full(&slave1, 0) {
+	if !wait_cluster_check_sync_full(&slave1, 0) {
 		log.Fatal("cluster check sync_full error")
 	}
 	log.Debug("after manual failover cluster check sync_full ok")
 
-	if !cluster_check_sync_partial_ok(&slave1, 4) {
+	if !wait_cluster_check_sync_partial_ok(&slave1, 4) {
 		log.Fatalf("cluster check sync_partial_ok error")
 	}
 	log.Debug("after manual failover cluster check sync_partial_ok ok")

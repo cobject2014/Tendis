@@ -127,7 +127,20 @@ echo ""
 echo "Starting test execution..."
 echo "(This may take several minutes, showing progress below)"
 echo ""
+set -o pipefail
+set +e # Allow script to continue if tests fail so we can print summary
 bash ./gotest.sh "$TEST_TYPE" 2>&1 | tee gotest_run.log
+TEST_EXIT_CODE=$?
+set -e # Re-enable strict error checking
+set +o pipefail
+
+if [ $TEST_EXIT_CODE -ne 0 ]; then
+    echo "❌ Error: gotest.sh execution failed (exit code $TEST_EXIT_CODE)"
+    echo "Check gotest_run.log for details."
+    # We continue to log analysis but the script should eventually fail
+    # We can flag it here
+    TEST_FAILED_FLAG=1
+fi
 
 # Check results
 echo ""
@@ -152,8 +165,11 @@ fi
 # Count passed tests
 PASS_COUNT=$(grep -c "go passed" "$LOGFILE" 2>/dev/null || echo "0")
 
-if [ "$PASS_COUNT" -eq "0" ] || [ -z "$PASS_COUNT" ]; then
-    echo "❌ Go Integration Tests FAILED (no tests passed)"
+if [ "$PASS_COUNT" -eq "0" ] || [ -z "$PASS_COUNT" ] || [ -n "$TEST_FAILED_FLAG" ]; then
+    echo "❌ Go Integration Tests FAILED"
+    if [ -n "$TEST_FAILED_FLAG" ]; then
+        echo "(Underlying test script execution failed)"
+    fi
     echo ""
     echo "--- Test log (last 100 lines) ---"
     tail -n 100 "$LOGFILE"

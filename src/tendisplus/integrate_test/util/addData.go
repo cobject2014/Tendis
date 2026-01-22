@@ -196,32 +196,28 @@ func AddDataWithBenchmarkFallback(m *RedisServer, auth string, num int, prefixke
 		key := GenerateKeyForBenchmark(prefixkey, i)
 		value := fmt.Sprintf("value_%d_%s", i, prefixkey)
 		
+		var err error
 		switch benchType {
 		case "set":
-			if err := (*cli).Set(ctx, key, value, 0).Err(); err != nil {
-				log.Warnf("addData fallback warning at key %s: %v", key, err)
-			}
+			err = (*cli).Set(ctx, key, value, 0).Err()
 		case "lpush":
-			if err := (*cli).LPush(ctx, key, value).Err(); err != nil {
-				log.Warnf("addData fallback warning at key %s: %v", key, err)
-			}
+			err = (*cli).LPush(ctx, key, value).Err()
 		case "sadd":
-			if err := (*cli).SAdd(ctx, key, value).Err(); err != nil {
-				log.Warnf("addData fallback warning at key %s: %v", key, err)
-			}
+			err = (*cli).SAdd(ctx, key, value).Err()
 		case "hset":
-			if err := (*cli).HSet(ctx, key, "field", value).Err(); err != nil {
-				log.Warnf("addData fallback warning at key %s: %v", key, err)
-			}
+			err = (*cli).HSet(ctx, key, "field", value).Err()
 		case "zadd":
-			if err := (*cli).ZAdd(ctx, key, redis.Z{Score: float64(i), Member: value}).Err(); err != nil {
-				log.Warnf("addData fallback warning at key %s: %v", key, err)
-			}
+			err = (*cli).ZAdd(ctx, key, redis.Z{Score: float64(i), Member: value}).Err()
 		default:
 			// Default to set
-			if err := (*cli).Set(ctx, key, value, 0).Err(); err != nil {
-				log.Warnf("addData fallback warning at key %s: %v", key, err)
-			}
+			err = (*cli).Set(ctx, key, value, 0).Err()
+		}
+
+		if err != nil {
+			// Log as warning only - do not Fatal/Exit
+			// Failover tests purposefully kill connections, so errors are expected
+			log.Warnf("addData fallback warning at key %s: %v", key, err)
+			continue
 		}
 	}
 	

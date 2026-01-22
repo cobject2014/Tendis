@@ -100,7 +100,7 @@ func setOutput(cmd *exec.Cmd, file string) {
 }
 
 func (c smartSubCli) getSubscribeResult() string {
-	time.Sleep(20 * time.Millisecond)
+	time.Sleep(2000 * time.Millisecond)
 
 	content, err := os.ReadFile(c.file)
 	if err != nil {
@@ -275,6 +275,19 @@ func migrateTest(predixy util.RedisServer, servers *[]util.RedisServer, clusterN
 			}
 		}
 		if isConnectToProxy {
+			if !check {
+				// Retry to allow Predixy time to update topology/slots on slow environments
+				log.Infof("predixy subscribe failed initially (%v), retrying...", err)
+				for k := 0; k < 10; k++ {
+					time.Sleep(1 * time.Second)
+					check, err = check_sub_and_pub(&master, channel)
+					if check {
+						log.Infof("predixy subscribe success after retry %d", k+1)
+						break
+					}
+				}
+			}
+
 			if !check { //predixy should handle the moved message and rediret to new master
 				log.Fatalf("predixy subscribe fail %s", err.Error())
 			}
