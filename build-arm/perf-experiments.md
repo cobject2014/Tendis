@@ -107,3 +107,35 @@ The LSE experiment produced a small but consistent regression across most worklo
 ### Verdict: REVERT ❌
 
 The default GCC outline-atomics (runtime LSE dispatch) is already optimal. Forcing inline LSE via `-mno-outline-atomics` provides no benefit and introduces a small regression. Changes reverted.
+
+---
+
+## Experiment 3 — Snappy/LZ4 ARM march flags via CFLAGS
+
+**Date**: 2026-03-27  
+**Status**: ❌ REVERT
+
+### What changed
+
+Added `-march=armv8-a+crc+crypto` to `ENV CFLAGS` and `ENV CXXFLAGS` in both Dockerfiles, so that all thirdparty libs (snappy, lz4, jemalloc) compile with ARM CRC/crypto instruction set — not just Tendis-own code and RocksDB.
+
+**Codegen verification**: Phase 3 had only 1/8 compilation records with `-march`; snappy-opt had 6/8. Confirmed snappy/lz4/Tendis code all received the flag.
+
+### Results
+
+| Workload   | Pipeline | Phase 3 (ops/sec) | Snappy-opt (ops/sec) | Change   |
+|------------|----------|--------------------|----------------------|----------|
+| SET        | 1        | 44,957             | 42,758               | **−4.9%** 🔴 |
+| SET        | 5        | 127,379            | 125,277              | −1.7% ⚪ |
+| GET        | 1        | 47,383             | 45,618               | **−3.7%** 🔴 |
+| GET        | 5        | 181,934            | 179,159              | −1.5% ⚪ |
+| Mixed 1:1  | 1        | 46,215             | 44,204               | **−4.4%** 🔴 |
+| Mixed 1:1  | 5        | 149,571            | 149,720              | +0.1% ⚪ |
+
+### Analysis
+
+Adding `-march` to ENV CFLAGS likely conflicts with the sed-applied `-march` in CMakeLists.txt files, causing double-specification or suboptimal flag ordering. The ENV flags are processed before CMake's own flags, and when both specify `-march`, the last one wins — but the interaction may produce unexpected codegen choices. The small regression is consistent across p1 workloads.
+
+### Verdict: REVERT ❌
+
+Changes reverted. The sed-only approach (Phase 3) remains optimal.
