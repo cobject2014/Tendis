@@ -70,20 +70,14 @@ RocksDB v8.5.3's own CMakeLists.txt adds `-march=armv8-a+crc+crypto` when it det
 
 ### 2.3 If verification fails
 - [ ] If RocksDB's auto-detection doesn't trigger (e.g., Docker buildx cross-compilation confuses `CMAKE_SYSTEM_PROCESSOR`), force the flags via one of these paths (choose one):
-  - **Option A — cmake command-line** (preferred): append `-DCMAKE_C_FLAGS="-march=armv8-a+crc+crypto"` and `-DCMAKE_CXX_FLAGS="-march=armv8-a+crc+crypto"` to the `cmake` invocation in both Dockerfiles:
-    ```dockerfile
-    RUN mkdir build_arm && cd build_arm && \
-        cmake .. -DCMAKE_BUILD_TYPE=Release \
-                 -DCMAKE_C_FLAGS="-march=armv8-a+crc+crypto" \
-                 -DCMAKE_CXX_FLAGS="-march=armv8-a+crc+crypto" \
-                 ...
-    ```
-  - **Option B — ENV variables**: set `CFLAGS` / `CXXFLAGS` in the Dockerfile before the cmake step:
+  - **Option A — ENV variables** (preferred): append to the existing `CFLAGS` / `CXXFLAGS` lines already in the Dockerfile (which carry `-O3`, `-Wno-error`, `-fpermissive`, `-include cstdint`):
     ```dockerfile
     ENV CFLAGS="${CFLAGS} -march=armv8-a+crc+crypto"
     ENV CXXFLAGS="${CXXFLAGS} -march=armv8-a+crc+crypto"
     ```
-  - **Option C — patch RocksDB's CMakeLists.txt**: add a `sed` in the Dockerfile to force the flag inside RocksDB's own CMakeLists.txt
+    This is safest because the build already depends on those ENV lines; appending preserves all existing flags.
+  - **Option B — patch RocksDB's CMakeLists.txt**: add a `sed` in the Dockerfile to force the flag inside RocksDB's own CMakeLists.txt (most surgical, only affects RocksDB)
+  - **Option C — cmake command-line**: pass `-DCMAKE_C_FLAGS=...` / `-DCMAKE_CXX_FLAGS=...` to cmake. **Caution**: CMake `-D` cache variables override the `CFLAGS`/`CXXFLAGS` environment variables entirely rather than appending, so the value must include all existing flags (`-O3 -Wno-error ...`) plus the new one — this is fragile and not recommended
   
   All options must be applied to **both** `build-arm/Dockerfile` and `build-arm/Dockerfile.test`
 
