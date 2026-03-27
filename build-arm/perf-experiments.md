@@ -60,3 +60,50 @@ p99 tail latency (~201ms) is unchanged — still dominated by RocksDB compaction
 ### Verdict: KEEP ✅
 
 The `-march=armv8-a+crc+crypto` flag delivers material throughput gains across all pure-workload cases (up to +30% on GET p5). No regressions in correctness tests. The changes are low-risk: the flag only affects Tendis-own code, and RocksDB was already using the same extensions at baseline.
+
+---
+
+## Experiment 2 — LSE Atomics: `-march=armv8.1-a` + `-mno-outline-atomics`
+
+**Date**: 2026-03-27  
+**Status**: ❌ REVERT
+
+### What changed
+
+| File | Change |
+|------|--------|
+| `build-arm/Dockerfile` | `-march=armv8-a+crc+crypto` → `-march=armv8.1-a+crc+crypto`; added `-mno-outline-atomics` to CFLAGS/CXXFLAGS |
+| `build-arm/Dockerfile.test` | Same changes |
+
+**Rationale**: GCC 11 on aarch64 enables `-moutline-atomics` by default — runtime dispatch stubs that select LL/SC or LSE at startup. The Phase 3 binary had 5,779 such dispatch calls. This experiment aimed to eliminate dispatch overhead by forcing inline native LSE instructions via `-march=armv8.1-a` (implies `+lse`) and `-mno-outline-atomics`.
+
+**Codegen verification**: Dispatch stubs reduced from 5,779 → 556 (remaining 556 from thirdparty libs with own build flags). Tendis-own code successfully compiled with inline LSE.
+
+### Results
+
+| Workload   | Pipeline | Phase 3 (ops/sec) | LSE (ops/sec) | Delta    | Change   |
+|------------|----------|--------------------|---------------|----------|----------|
+| SET        | 1        | 44,957             | 42,067        | −2,890   | **−6.4%** 🔴 |
+| SET        | 5        | 127,379            | 123,798       | −3,581   | **−2.8%** 🔴 |
+| GET        | 1        | 47,383             | 45,643        | −1,740   | **−3.7%** 🔴 |
+| GET        | 5        | 181,934            | 183,996       | +2,062   | +1.1% ⚪ |
+| Mixed 1:1  | 1        | 46,215             | 45,309        | −906     | −2.0% ⚪ |
+| Mixed 1:1  | 5        | 149,571            | 146,446       | −3,125   | **−2.1%** 🔴 |
+
+### Regression tests
+
+| Suite | Result |
+|-------|--------|
+| Redis compatibility (52 tests) | ✅ PASSED |
+| Go integration tests | 🔄 Running (not waited — reverted based on benchmark results) |
+
+### Analysis
+
+The LSE experiment produced a small but consistent regression across most workloads. Two factors explain this:
+
+1. **GCC outline-atomics already provides LSE**: On hardware that supports LSE (Apple Silicon, Graviton2+), the runtime dispatch was already selecting LSE instructions. The dispatch overhead (~2-3%) was the only potential gain.
+2. **Forced `-mno-outline-atomics` may be suboptimal**: The runtime dispatch can select the best atomics implementation per-callsite. Forcing all atomics to inline LSE removes this flexibility. On Apple Silicon's micro-architecture, some LL/SC patterns may actually be faster than LSE equivalents.
+
+### Verdict: REVERT ❌
+
+The default GCC outline-atomics (runtime LSE dispatch) is already optimal. Forcing inline LSE via `-mno-outline-atomics` provides no benefit and introduces a small regression. Changes reverted.
