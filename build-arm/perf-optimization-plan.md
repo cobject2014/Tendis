@@ -2,7 +2,13 @@
 
 ## Overview
 
-The current ARM build replaces x86-specific flags (`-mno-avx`, `-mno-avx2`, `-march=nocona`) with a generic `-march=armv8-a` and `-O3`. This gets the build working but leaves ARM-specific hardware acceleration unused. General optimizations (LTO, PGO, config tuning, etc.) are assumed already handled by Tendis upstream — this plan focuses **only on ARM-specific gaps**.
+The current ARM build replaces x86-specific flags (`-mno-avx`, `-mno-avx2`, `-march=nocona`) with a generic `-march=armv8-a` and `-O3`. This gets the build working but leaves ARM-specific hardware acceleration partially unused in **Tendis's own code**.
+
+However, **RocksDB v8.5.3 handles ARM optimization internally** — its CMakeLists.txt (lines 232-239) auto-detects aarch64 and adds `-march=armv8-a+crc+crypto` for its own compilation. This means:
+- RocksDB CRC32C hardware acceleration is **likely already active** without any Dockerfile change
+- The Dockerfile's sed (`-march=nocona` → `-march=armv8-a`) only affects CMakeLists.txt files that contain `-march=nocona` — which is Tendis's own code, **not** RocksDB's
+
+General optimizations (LTO, PGO, config tuning, etc.) are assumed already handled by Tendis upstream — this plan focuses **only on ARM-specific gaps**.
 
 ### Build path rule
 
@@ -12,9 +18,13 @@ Every compiler or build flag change **must be applied to both**:
 
 To prevent drift, factor shared ARM flags into a Docker build argument:
 ```dockerfile
-ARG ARM_MARCH_FLAGS="-march=armv8-a"
+ARG ARM_MARCH_FLAGS="-march=armv8-a+crc+crypto"
 # used in the sed replacement and ENV CXXFLAGS lines
 ```
+
+### Known stray x86 flags
+
+- [src/tendisplus/tools/CMakeLists.txt](../src/tendisplus/tools/CMakeLists.txt) line 2 contains `-march=native` hardcoded in link flags — this is not caught by the current sed and may cause issues or suboptimal codegen on ARM
 
 ---
 
@@ -30,6 +40,7 @@ ARG ARM_MARCH_FLAGS="-march=armv8-a"
 - [ ] **Warm-up**: before each measured workload, run a 30-second warm-up with the same command (results discarded)
 - [ ] **Trials**: run each workload **3 times**; report **median ops/sec** and note min/max
 - [ ] **Reset policy**: restart the Tendis container between workload types (SET → GET → mixed); within a workload's 3 trials, keep the server running
+- [ ] **Data seeding**: before GET-only and mixed workloads, pre-seed with a SET run (e.g., `memtier_benchmark --ratio=1:0 --key-maximum=1000000 -d 128 -c 50 -t 4 --test-time=60`) to populate data; this seeding run is not measured
 - [ ] **Resource capture**: record CPU and memory via `docker stats --no-stream --format "table {{.CPUPerc}}\t{{.MemUsage}}"` at 10-second intervals during the run, using a background script; do not rely on ad-hoc observation
 
 ### 1.3 Run baseline benchmarks
@@ -42,38 +53,60 @@ ARG ARM_MARCH_FLAGS="-march=armv8-a"
 
 ---
 
-## Phase 2: ARM Compiler Target (High impact)
+## Phase 2: Verify RocksDB ARM CRC32 (verify-only, likely already working)
 
-### 2.1 Upgrade `-march` to enable ARM hardware acceleration
-- [ ] Change `-march=armv8-a` → `-march=armv8-a+crc+crypto` in **both** `build-arm/Dockerfile` and `build-arm/Dockerfile.test`
-  - Enables **hardware CRC32** instructions (ARM equivalent of x86 SSE4.2 CRC)
-  - Enables **hardware AES** instructions (ARM equivalent of x86 AES-NI)
-- [ ] RocksDB uses CRC32 heavily for checksums — hardware CRC can yield **2-5x** CRC speedup
-- [ ] If targeting specific hardware (e.g., AWS Graviton2/3), consider:
-  - `-march=armv8.2-a+crc+crypto+fp16+dotprod`
-  - or `-mcpu=neoverse-n1`
+RocksDB v8.5.3's own CMakeLists.txt adds `-march=armv8-a+crc+crypto` when it detects aarch64. This should make hardware CRC32C active without any change on our side. This phase **verifies** that assumption.
 
-### 2.2 Validation (three-layer)
-1. **Source verification**: inspect RocksDB `util/crc32c.cc` to confirm an ARM CRC path exists and that `__ARM_FEATURE_CRC32` (set by `-march=armv8-a+crc`) activates it
-2. **Build-time check**: verify compile definitions include the ARM CRC flag; `objdump -d tendisplus | grep crc32` as supporting evidence (not primary proof)
-3. **Benchmark comparison**: run the full benchmark protocol (Phase 1.2) and compare against baseline — the SET workload is checksum-sensitive and should show measurable improvement
+### 2.1 Source-level verification (done — results recorded here)
+- [x] `src/thirdparty/rocksdb/rocksdb/CMakeLists.txt` lines 232-239: checks `CMAKE_SYSTEM_PROCESSOR` for `arm64|aarch64|AARCH64`, then adds `-march=armv8-a+crc+crypto`
+- [x] `src/thirdparty/rocksdb/rocksdb/util/crc32c_arm64.h`: `#ifdef __ARM_FEATURE_CRC32` → defines `HAVE_ARM64_CRC` and maps `crc32c_u64` to `__crc32cd` intrinsic
+- [x] `src/thirdparty/rocksdb/rocksdb/util/crc32c.cc` lines 1111-1116: `#elif defined(HAVE_ARM64_CRC)` → selects `ExtendARMImpl` at runtime via `crc32c_runtime_check()`
+- [x] `src/thirdparty/rocksdb/rocksdb/util/crc32c_arm64.cc`: runtime check uses `getauxval(AT_HWCAP) & HWCAP_CRC32` on Linux
+
+### 2.2 Build-time verification (to be done inside Docker)
+- [ ] Add a build step to print the CMake status message: should show `HAS_ARMV8_CRC yes`
+- [ ] `objdump -d tendisplus | grep -c crc32c` as supporting evidence
+- [ ] Check RocksDB startup log for the exact string: `Fast CRC32 supported: Supported on Arm64` (failure would show `Fast CRC32 supported: Not supported on Arm64`)
+
+### 2.3 If verification fails
+- [ ] If RocksDB's auto-detection doesn't trigger (e.g., Docker buildx cross-compilation confuses `CMAKE_SYSTEM_PROCESSOR`), force the flags via one of these paths (choose one):
+  - **Option A — cmake command-line** (preferred): append `-DCMAKE_C_FLAGS="-march=armv8-a+crc+crypto"` and `-DCMAKE_CXX_FLAGS="-march=armv8-a+crc+crypto"` to the `cmake` invocation in both Dockerfiles:
+    ```dockerfile
+    RUN mkdir build_arm && cd build_arm && \
+        cmake .. -DCMAKE_BUILD_TYPE=Release \
+                 -DCMAKE_C_FLAGS="-march=armv8-a+crc+crypto" \
+                 -DCMAKE_CXX_FLAGS="-march=armv8-a+crc+crypto" \
+                 ...
+    ```
+  - **Option B — ENV variables**: set `CFLAGS` / `CXXFLAGS` in the Dockerfile before the cmake step:
+    ```dockerfile
+    ENV CFLAGS="${CFLAGS} -march=armv8-a+crc+crypto"
+    ENV CXXFLAGS="${CXXFLAGS} -march=armv8-a+crc+crypto"
+    ```
+  - **Option C — patch RocksDB's CMakeLists.txt**: add a `sed` in the Dockerfile to force the flag inside RocksDB's own CMakeLists.txt
+  
+  All options must be applied to **both** `build-arm/Dockerfile` and `build-arm/Dockerfile.test`
 
 ---
 
-## Phase 3: RocksDB ARM Hardware Codepaths
+## Phase 3: Tendis-own Code ARM Flags
 
-### 3.1 Verify ARM CRC32C is active in RocksDB (High impact)
-- [ ] On x86, RocksDB uses `HAVE_SSE42` to enable hardware CRC32C via `_mm_crc32_*` intrinsics
-- [ ] For ARM, RocksDB needs `HAVE_ARM64_CRC` (or auto-detection via `__ARM_FEATURE_CRC32`)
-- [ ] Check `util/crc32c.cc` in the RocksDB v8.5.3 source — verify it has an ARM CRC path that is **conditionally compiled** with `__ARM_FEATURE_CRC32`
-- [ ] Confirm that compiling with `-march=armv8-a+crc` causes GCC to predefine `__ARM_FEATURE_CRC32` (test with `echo | gcc -march=armv8-a+crc -dM -E - | grep CRC`)
-- [ ] If not auto-detected, manually define `-DHAVE_ARM64_CRC` in CMake
+The Dockerfile sed changes `-march=nocona` → `-march=armv8-a` in Tendis's own CMakeLists.txt files. This gives Tendis-authored code (not RocksDB) only the base ARMv8 instruction set, missing CRC32/AES for any Tendis code that might use them.
+
+### 3.1 Upgrade Tendis code march flag
+- [ ] Change the sed replacement target from `-march=armv8-a` to `-march=armv8-a+crc+crypto` in **both Dockerfiles**
+- [ ] This ensures Tendis's own code can also use hardware CRC/AES if needed
+- [ ] Fix the stray `-march=native` in `src/tendisplus/tools/CMakeLists.txt` — add a sed to remove or replace it
 
 ### 3.2 Verify ARM-specific runtime code paths
 - [ ] `AsmVolatilePause()` uses `wfe` on aarch64 — **correct** (x86 equivalent: `pause`)
 - [ ] `CACHE_LINE_SIZE` = 128 for aarch64 — **correct** (x86 uses 64)
-- [ ] `xxhash.cc` checks `__ARM_FEATURE_UNALIGNED` for unaligned access — verify this is set by the compiler with our `-march` flags
-- [ ] Check if any x86-only SIMD paths (SSE/AVX) in Tendis source have no ARM NEON fallback
+- [ ] `xxhash.cc` checks `__ARM_FEATURE_UNALIGNED` — verify this is defined by the compiler with `-march=armv8-a+crc+crypto`
+- [ ] Check if any x86-only SIMD paths (SSE/AVX) in Tendis source code (not RocksDB) have no ARM fallback
+
+### 3.3 Validation
+1. **Regression tests**: must pass in both Dockerfiles
+2. **Benchmark comparison**: run the full benchmark protocol (Phase 1.2) and compare against baseline
 
 ---
 
@@ -121,10 +154,10 @@ All experiments should be logged in `build-arm/perf-experiments.md` with:
 
 ## Priority Order (recommended execution sequence)
 
-| Priority | Item | Expected Impact | Risk | Why ARM-specific |
-|----------|------|----------------|------|------------------|
-| 1 | Baseline measurement (Phase 1) | prerequisite | None | — |
-| 2 | `-march=armv8-a+crc+crypto` + source verification (2.1, 2.2, 3.1) | High | Low | Enables ARM CRC32/AES hardware (x86 has SSE4.2/AES-NI) |
-| 3 | ARM runtime codepath audit (3.2) | Low-Medium | Low | Verify wfe/cache-line/unaligned access correctness |
-| 4 | jemalloc page size check (4.1) | Conditional | Low | Only if container uses 64KB pages |
-| 5 | jemalloc page size fix (4.2) | High if needed | Low | Only if 4.1 confirms 64KB pages |
+| Priority | Item | Expected Impact | Risk | Notes |
+|----------|------|----------------|------|-------|
+| 1 | Baseline measurement (Phase 1) | prerequisite | None | Uses current unmodified image |
+| 2 | Verify RocksDB CRC32 already works (Phase 2) | Verify only | None | RocksDB v8.5.3 should auto-enable; confirm in Docker build log |
+| 3 | Upgrade Tendis-own code `-march` + fix stray `-march=native` (Phase 3) | Low/Unknown until benchmarked | Low | Affects Tendis code only, not in known hot path; treat as hypothesis to test |
+| 4 | jemalloc page size check (Phase 4.1) | Conditional | Low | Only matters if container uses 64KB pages |
+| 5 | jemalloc page size fix (Phase 4.2) | High if needed | Low | Only if 4.1 confirms 64KB pages |
