@@ -43,9 +43,10 @@ RUN sed -i 's/signed char DecodeTable/char DecodeTable/g' src/tendisplus/utils/b
     sed -i 's/signed char ch = DecodeTable/char ch = DecodeTable/g' src/tendisplus/utils/base64.cpp && \
     sed -i 's/char ch = DecodeTable/signed char ch = DecodeTable/g' src/tendisplus/utils/base64.cpp
 
-# 2. 移除硬编码的 x86 指令优化，改为 ARM 兼容模式
+# 2. 移除硬编码的 x86 指令优化，改为 ARM 兼容模式（启用 CRC32/AES 硬件加速）
 RUN find . -name "CMakeLists.txt" -exec sed -i 's/-mno-avx -mno-avx2//g' {} + && \
-    find . -name "CMakeLists.txt" -exec sed -i 's/-march=nocona/-march=armv8-a/g' {} +
+    find . -name "CMakeLists.txt" -exec sed -i 's/-march=nocona/-march=armv8-a+crc+crypto/g' {} + && \
+    sed -i 's/ -march=native//g' src/tendisplus/tools/CMakeLists.txt
 
 # 3. 预处理 jemalloc (保持不变)
 ENV EXTRA_CXXFLAGS="-O3"

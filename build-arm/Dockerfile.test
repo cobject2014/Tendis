@@ -69,7 +69,8 @@ RUN sed -i 's/signed char DecodeTable/char DecodeTable/g' src/tendisplus/utils/b
     sed -i 's/char ch = DecodeTable/signed char ch = DecodeTable/g' src/tendisplus/utils/base64.cpp
 
 RUN find . -name "CMakeLists.txt" -exec sed -i 's/-mno-avx -mno-avx2//g' {} + && \
-    find . -name "CMakeLists.txt" -exec sed -i 's/-march=nocona/-march=armv8-a/g' {} +
+    find . -name "CMakeLists.txt" -exec sed -i 's/-march=nocona/-march=armv8-a+crc+crypto/g' {} + && \
+    sed -i 's/ -march=native//g' src/tendisplus/tools/CMakeLists.txt
 
 ENV CXXFLAGS="-O3 -Wno-error -Wno-deprecated-declarations -fpermissive -include cstdint"
 ENV CFLAGS="-O3 -Wno-error -Wno-deprecated-declarations"
