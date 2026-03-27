@@ -20,3 +20,7 @@ This fork leverage existing test sutie, but port to ARM. The bulid/test process 
 ## Others
 
 Read `build-arm/readme.md` and `build-arm/build_arm.md` for more information.
+
+## Log
+
+For all important actions, please log to `.agents/log` folder, the file name should be "YYYY-mm-dd.log".
