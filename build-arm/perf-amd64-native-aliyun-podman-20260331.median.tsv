@@ -1,0 +1,3 @@
+workload	median_trial	median_ops_sec	median_p50_ms	median_p99_ms	trial_ops_sec
+set_p1	3	42006.17	4.639	10.431	42288.34 / 40066.60 / 42006.17
+set_p5	3	65742.66	14.335	28.671	63127.24 / 66572.18 / 65742.66
