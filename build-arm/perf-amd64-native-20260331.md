@@ -90,3 +90,57 @@ It does **not** by itself answer the architecture gap question, because this hos
 - likely different virtualization noise
 
 So these results should be treated as **native amd64 reference data for this host**, not as a final `amd64 vs arm64` verdict.
+
+## Likely VM performance issues
+
+Follow-up diagnostics on the same host point to several infrastructure-side problems that can explain the poor write result:
+
+1. The disk is attached through an old VMware virtual SCSI path, not a paravirtual controller.
+
+   Kernel messages show:
+
+   - `LSI53C1030 B0`
+   - `VMware Virtual disk`
+
+   That is a much weaker choice for write-heavy database benchmarking than VMware PVSCSI or virtual NVMe.
+
+2. The kernel cannot discover disk cache capability and falls back to write-through assumptions.
+
+   `dmesg` showed:
+
+   - `Cache data unavailable`
+   - `Assuming drive cache: write through`
+
+   For a write path like Tendis + RocksDB + binlog, this is a major red flag. It strongly suggests sync-heavy writes will stall far more than on a normal write-back-backed SSD path.
+
+3. The VM CPU topology is presented as `4 sockets x 1 core`, not `1 socket x 4 cores`.
+
+   `lscpu` reported:
+
+   - `CPU(s): 4`
+   - `Thread(s) per core: 1`
+   - `Core(s) per socket: 1`
+   - `Socket(s): 4`
+
+   That topology is unusual for a small VM and can create unnecessary scheduler and NUMA/topology weirdness for a container benchmark.
+
+4. Small synchronous writes are much slower than large sequential writes.
+
+   Lightweight write checks on the host:
+
+   - large sequential write with one final flush:
+     - `dd if=/dev/zero of=/tmp/dd-fsync-test.bin bs=1M count=128 conv=fdatasync`
+     - elapsed `0.40s`
+   - small sync write path:
+     - `dd if=/dev/zero of=/tmp/dd-dsync-4k.bin bs=4K count=10000 oflag=dsync`
+     - elapsed `6.15s`
+
+   The second case is only about `40 MiB` total data but takes over six seconds, which is consistent with the benchmark's visible write stalls and long p99 tails.
+
+## Practical recommendations
+
+- Recreate the VM with `1 socket x 4 cores`
+- Prefer VMware PVSCSI or virtual NVMe instead of the current LSI virtual SCSI path
+- Check ESXi datastore / virtual disk policy and enable a sane write-back-backed cache path if your durability model allows it
+- If possible, benchmark on a less contended datastore or directly on a host-backed local SSD / NVMe path
+- Before drawing architecture conclusions, rerun the same amd64 benchmark after fixing the VM/storage path
